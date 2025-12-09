@@ -1,6 +1,6 @@
 /**
  * @file trainer.h
- * @brief Training loop for the Autoencoder with detailed profiling
+ * @brief Training loop with train/test evaluation and best model saving
  */
 
 #ifndef TRAINER_H
@@ -10,37 +10,39 @@
 #include "cifar10.h"
 #include "autoencoder.h"
 #include <iomanip>
+#include <limits>
 
 /**
  * @struct TrainingConfig
- * @brief Configuration for training
  */
 struct TrainingConfig {
     int batchSize = 32;
     int epochs = 20;
     float learningRate = 0.001f;
     bool shuffle = true;
-    int printEvery = 100;        // Print progress every N batches
+    int printEvery = 100;
     std::string saveModelPath = "autoencoder_weights.bin";
-    bool useAdam = true;         // Use Adam optimizer (true) or SGD (false)
-    float adamBeta1 = 0.9f;      // Adam beta1 parameter
-    float adamBeta2 = 0.999f;    // Adam beta2 parameter
+    std::string bestModelPath = "autoencoder_best.bin";
+    bool useAdam = true;
+    float adamBeta1 = 0.9f;
+    float adamBeta2 = 0.999f;
 };
 
 /**
  * @struct EpochStats
- * @brief Statistics for a single epoch
  */
 struct EpochStats {
     int epoch;
-    double avgLoss;
-    double epochTime;           // in seconds
+    double trainLoss;
+    double testLoss;
+    double epochTime;
     int numBatches;
+    bool isBest;
 };
 
 /**
  * @class Trainer
- * @brief Handles training loop with profiling
+ * @brief Handles training with train/test evaluation and best model tracking
  */
 class Trainer {
 private:
@@ -50,33 +52,65 @@ private:
 
     std::vector<EpochStats> trainingHistory;
     Timer totalTimer;
+    
+    double bestTestLoss = std::numeric_limits<double>::max();
+    int bestEpoch = 0;
 
 public:
     Trainer(Autoencoder& m, CIFAR10Dataset& d, const TrainingConfig& cfg = TrainingConfig())
         : model(m), dataset(d), config(cfg) {}
 
     /**
-     * @brief Run training loop
+     * @brief Evaluate model on train or test set (forward only)
+     */
+    double evaluate(bool isTrainSet) {
+        int numImages = isTrainSet ? dataset.getNumTrainImages() : dataset.getNumTestImages();
+        int numBatches = (numImages + config.batchSize - 1) / config.batchSize;
+        
+        double totalLoss = 0.0;
+        int batchCount = 0;
+        
+        for (int b = 0; b < numBatches; b++) {
+            int startIdx = b * config.batchSize;
+            int currentBatchSize = std::min(config.batchSize, numImages - startIdx);
+            
+            Tensor4D batch = isTrainSet ? 
+                dataset.getTrainBatch(startIdx, currentBatchSize) :
+                dataset.getTestBatch(startIdx, currentBatchSize);
+            
+            Tensor4D output = model.forward(batch);
+            
+            // Compute MSE loss manually (no backward)
+            double loss = 0.0;
+            for (size_t i = 0; i < output.data.size(); i++) {
+                double diff = output.data[i] - batch.data[i];
+                loss += diff * diff;
+            }
+            loss /= output.data.size();
+            
+            totalLoss += loss;
+            batchCount++;
+        }
+        
+        return totalLoss / batchCount;
+    }
+
+    /**
+     * @brief Run training loop with train/test evaluation
      */
     void train() {
         std::cout << "\n========== TRAINING STARTED ==========\n";
-        std::cout << "Batch size: " << config.batchSize << std::endl;
-        std::cout << "Epochs: " << config.epochs << std::endl;
-        std::cout << "Learning rate: " << config.learningRate << std::endl;
-        std::cout << "Optimizer: " << (config.useAdam ? "Adam" : "SGD") << std::endl;
+        std::cout << "Batch size:     " << config.batchSize << std::endl;
+        std::cout << "Epochs:         " << config.epochs << std::endl;
+        std::cout << "Learning rate:  " << config.learningRate << std::endl;
+        std::cout << "Optimizer:      " << (config.useAdam ? "Adam" : "SGD") << std::endl;
+        std::cout << "Train samples:  " << dataset.getNumTrainImages() << std::endl;
+        std::cout << "Test samples:   " << dataset.getNumTestImages() << std::endl;
         std::cout << "========================================\n\n";
 
         int numImages = dataset.getNumTrainImages();
-        int numBatches = (numImages + config.batchSize - 1) / config.batchSize;  // Round up
-        
-        // Warn if batch size is larger than dataset
-        if (config.batchSize > numImages) {
-            std::cout << "Warning: Batch size (" << config.batchSize 
-                      << ") is larger than dataset (" << numImages 
-                      << "). Using batch size = " << numImages << std::endl;
-        }
+        int numBatches = (numImages + config.batchSize - 1) / config.batchSize;
 
-        // Create Adam optimizer if needed
         AdamOptimizer adamOptimizer(config.learningRate, config.adamBeta1, config.adamBeta2);
 
         totalTimer.start();
@@ -85,7 +119,6 @@ public:
             Timer epochTimer;
             epochTimer.start();
 
-            // Shuffle data at the beginning of each epoch
             if (config.shuffle) {
                 dataset.shuffleTrainData();
             }
@@ -93,30 +126,24 @@ public:
             double epochLoss = 0.0;
             int batchCount = 0;
 
+            // Training loop
             for (int b = 0; b < numBatches; b++) {
                 int startIdx = b * config.batchSize;
                 int currentBatchSize = std::min(config.batchSize, numImages - startIdx);
                 
-                // Get batch
                 Tensor4D batch = dataset.getTrainBatch(startIdx, currentBatchSize);
-
-                // Forward pass
-                Tensor4D output = model.forward(batch);
-
-                // Backward pass (target = input for autoencoder)
+                model.forward(batch);
                 DataType loss = model.backward(batch);
                 epochLoss += loss;
                 batchCount++;
 
-                // Update weights using chosen optimizer
                 if (config.useAdam) {
-                    adamOptimizer.step();  // Increment timestep
+                    adamOptimizer.step();
                     model.updateWeightsAdam(adamOptimizer);
                 } else {
                     model.updateWeights(config.learningRate);
                 }
 
-                // Print progress
                 if ((b + 1) % config.printEvery == 0) {
                     std::cout << "  Epoch " << (epoch + 1) << "/" << config.epochs
                               << " | Batch " << (b + 1) << "/" << numBatches
@@ -125,87 +152,97 @@ public:
                 }
             }
 
+            // Evaluate on train and test sets
+            double trainLoss = evaluate(true);
+            double testLoss = evaluate(false);
+
             epochTimer.stop();
 
-            // Store epoch statistics
+            // Check if best model
+            bool isBest = testLoss < bestTestLoss;
+            if (isBest) {
+                bestTestLoss = testLoss;
+                bestEpoch = epoch + 1;
+                model.saveWeights(config.bestModelPath);
+            }
+
+            // Store stats
             EpochStats stats;
             stats.epoch = epoch + 1;
-            stats.avgLoss = epochLoss / batchCount;
+            stats.trainLoss = trainLoss;
+            stats.testLoss = testLoss;
             stats.epochTime = epochTimer.elapsedSec();
             stats.numBatches = batchCount;
+            stats.isBest = isBest;
             trainingHistory.push_back(stats);
 
             // Print epoch summary
             std::cout << "\n[Epoch " << std::setw(2) << (epoch + 1) << "/" << config.epochs << "] "
-                      << "Loss: " << std::fixed << std::setprecision(6) << stats.avgLoss
-                      << " | Time: " << std::fixed << std::setprecision(2) << stats.epochTime << "s"
-                      << " | " << std::fixed << std::setprecision(2) 
-                      << (stats.epochTime / stats.numBatches * 1000) << " ms/batch\n";
+                      << "Train: " << std::fixed << std::setprecision(6) << trainLoss
+                      << " | Test: " << std::setprecision(6) << testLoss
+                      << " | Time: " << std::setprecision(2) << stats.epochTime << "s";
+            if (isBest) std::cout << " *Best*";
+            std::cout << "\n";
         }
 
         totalTimer.stop();
+        model.saveWeights(config.saveModelPath);
 
         std::cout << "\n========== TRAINING COMPLETED ==========\n";
-        std::cout << "Total training time: " << std::fixed << std::setprecision(2) 
+        std::cout << "Total time:     " << std::fixed << std::setprecision(2) 
                   << totalTimer.elapsedSec() << " seconds\n";
+        std::cout << "Best epoch:     " << bestEpoch << "\n";
+        std::cout << "Best test loss: " << std::setprecision(6) << bestTestLoss << "\n";
+        std::cout << "Best model:     " << config.bestModelPath << "\n";
+        std::cout << "Final model:    " << config.saveModelPath << "\n";
         std::cout << "=========================================\n";
-
-        // Save model
-        model.saveWeights(config.saveModelPath);
     }
 
     /**
      * @brief Print detailed training report
      */
     void printTrainingReport() {
-        std::cout << "\n============= TRAINING REPORT =============\n";
+        std::cout << "\n================= TRAINING REPORT =================\n";
         
-        // Epoch-by-epoch summary
         std::cout << std::left << std::setw(8) << "Epoch"
-                  << std::right << std::setw(15) << "Loss"
-                  << std::setw(15) << "Time (s)"
-                  << std::setw(15) << "ms/batch" << "\n";
-        std::cout << std::string(53, '-') << "\n";
+                  << std::right << std::setw(14) << "Train Loss"
+                  << std::setw(14) << "Test Loss"
+                  << std::setw(12) << "Time (s)"
+                  << std::setw(8) << "Best" << "\n";
+        std::cout << std::string(56, '-') << "\n";
 
         for (const auto& stats : trainingHistory) {
             std::cout << std::left << std::setw(8) << stats.epoch
-                      << std::right << std::setw(15) << std::fixed << std::setprecision(6) << stats.avgLoss
-                      << std::setw(15) << std::fixed << std::setprecision(2) << stats.epochTime
-                      << std::setw(15) << std::fixed << std::setprecision(2) 
-                      << (stats.epochTime / stats.numBatches * 1000) << "\n";
+                      << std::right << std::setw(14) << std::fixed << std::setprecision(6) << stats.trainLoss
+                      << std::setw(14) << std::setprecision(6) << stats.testLoss
+                      << std::setw(12) << std::setprecision(2) << stats.epochTime
+                      << std::setw(8) << (stats.isBest ? "*" : "") << "\n";
         }
 
-        // Summary statistics
-        std::cout << std::string(53, '-') << "\n";
+        std::cout << std::string(56, '-') << "\n";
         
-        double totalTime = 0, avgTime = 0;
-        for (const auto& stats : trainingHistory) {
-            totalTime += stats.epochTime;
-        }
-        avgTime = totalTime / trainingHistory.size();
+        double totalTime = 0;
+        for (const auto& stats : trainingHistory) totalTime += stats.epochTime;
 
-        std::cout << "Total Training Time:  " << std::fixed << std::setprecision(2) 
-                  << totalTime << " seconds\n";
-        std::cout << "Average Time/Epoch:   " << std::fixed << std::setprecision(2) 
-                  << avgTime << " seconds\n";
-        std::cout << "Final Loss:           " << std::fixed << std::setprecision(6) 
-                  << trainingHistory.back().avgLoss << "\n";
-        std::cout << "=============================================\n";
+        std::cout << "Total Training Time:   " << std::fixed << std::setprecision(2) << totalTime << " seconds\n";
+        std::cout << "Average Time/Epoch:    " << std::setprecision(2) << (totalTime / trainingHistory.size()) << " seconds\n";
+        std::cout << "Final Train Loss:      " << std::setprecision(6) << trainingHistory.back().trainLoss << "\n";
+        std::cout << "Final Test Loss:       " << std::setprecision(6) << trainingHistory.back().testLoss << "\n";
+        std::cout << "Best Test Loss:        " << std::setprecision(6) << bestTestLoss << " (Epoch " << bestEpoch << ")\n";
+        std::cout << "===================================================\n";
     }
 
-    /**
-     * @brief Get the final reconstruction loss
-     */
     DataType getFinalLoss() const {
-        return trainingHistory.empty() ? 0.0f : trainingHistory.back().avgLoss;
+        return trainingHistory.empty() ? 0.0f : trainingHistory.back().trainLoss;
     }
 
-    /**
-     * @brief Get total training time in seconds
-     */
-    double getTotalTrainingTime() const {
-        return totalTimer.elapsedSec();
+    DataType getFinalTestLoss() const {
+        return trainingHistory.empty() ? 0.0f : trainingHistory.back().testLoss;
     }
+
+    DataType getBestTestLoss() const { return bestTestLoss; }
+    int getBestEpoch() const { return bestEpoch; }
+    double getTotalTrainingTime() const { return totalTimer.elapsedSec(); }
 };
 
 #endif // TRAINER_H
