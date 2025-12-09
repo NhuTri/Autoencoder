@@ -235,6 +235,24 @@ int main(int argc, char* argv[]) {
     // Save final model
     model.saveWeights(finalModelPath);
 
+    // Export training history to CSV
+    std::string csvPath = "training_history_gpu.csv";
+    {
+        std::ofstream csvFile(csvPath);
+        if (csvFile.is_open()) {
+            csvFile << "epoch,train_loss,test_loss,time_sec,is_best\n";
+            for (const auto& s : allStats) {
+                csvFile << s.epoch << ","
+                        << std::fixed << std::setprecision(8) << s.trainLoss << ","
+                        << s.testLoss << ","
+                        << std::setprecision(4) << s.epochTime << ","
+                        << (s.isBest ? 1 : 0) << "\n";
+            }
+            csvFile.close();
+            std::cout << "Training history exported to: " << csvPath << "\n";
+        }
+    }
+
     // Reports
     std::cout << "\nStep 4: Reports\n";
     std::cout << std::string(50, '-') << "\n";
