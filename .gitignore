@@ -1,0 +1,27 @@
+# Compiled files
+autoencoder_cpu
+*.o
+*.out
+
+# CIFAR-10 dataset
+cifar-10-batches-bin/
+cifar-10-binary.tar.gz
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Google Colab
+*.ipynb_checkpoints
+__pycache__/
