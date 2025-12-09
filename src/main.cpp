@@ -115,6 +115,9 @@ int main(int argc, char* argv[]) {
     // Memory report
     gMemoryTracker.printReport();
 
+    // Export training history to CSV
+    trainer.exportToCSV("training_history_cpu.csv");
+
     // ========== SUMMARY ==========
     std::cout << "\n============== FINAL SUMMARY ==============\n";
     std::cout << "Training completed successfully!\n";
