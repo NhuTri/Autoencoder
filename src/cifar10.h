@@ -97,6 +97,10 @@ public:
     int getNumTrainImages() const { return numTrainImages; }
     int getNumTestImages() const { return numTestImages; }
 
+    std::vector<int> getTestLabels(int startIdx, int batchSize) const {
+        return std::vector<int>(testLabels.begin() + startIdx, testLabels.begin() + startIdx + batchSize);
+    }
+
 private:
     bool loadBatch(const std::string& filename, float* images, int* labels, int numImages) {
         std::ifstream file(filename, std::ios::binary);

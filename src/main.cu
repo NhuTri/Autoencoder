@@ -95,6 +95,100 @@ double evaluateLoss(Autoencoder& model, CIFAR10Dataset& dataset,
     return totalLoss / numBatches;
 }
 
+/**
+ * @brief Export sample reconstructed images for visualization
+ * 
+ * Takes some test images, passes them through the autoencoder,
+ * and saves both original and reconstructed images to a binary file.
+ */
+void exportReconstructedImages(Autoencoder& model, CIFAR10Dataset& dataset,
+                               int numSamples = 10, 
+                               const std::string& filename = "reconstructed_images_gpu.bin") {
+    std::cout << "\n========== EXPORTING RECONSTRUCTED IMAGES ==========\n";
+    
+    // Limit to available test images
+    numSamples = std::min(numSamples, dataset.getNumTestImages());
+    
+    // Get test images
+    Tensor4D testBatch = dataset.getTestBatch(0, numSamples);
+    std::vector<int> testLabels = dataset.getTestLabels(0, numSamples);
+    
+    // Forward pass through autoencoder
+    Tensor4D reconstructed = model.forward(testBatch);
+    
+    // Calculate per-image MSE
+    std::vector<float> perImageMSE(numSamples);
+    int height = testBatch.height;
+    int width = testBatch.width;
+    int channels = testBatch.channels;
+    
+    for (int i = 0; i < numSamples; i++) {
+        double mse = 0.0;
+        int pixelCount = height * width * channels;
+        for (int h = 0; h < height; h++) {
+            for (int w = 0; w < width; w++) {
+                for (int c = 0; c < channels; c++) {
+                    double diff = testBatch.at(i, h, w, c) - reconstructed.at(i, h, w, c);
+                    mse += diff * diff;
+                }
+            }
+        }
+        perImageMSE[i] = static_cast<float>(mse / pixelCount);
+    }
+    
+    // Open output file
+    std::ofstream file(filename, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "Error: Cannot open file for writing: " << filename << std::endl;
+        return;
+    }
+    
+    // Write header
+    file.write(reinterpret_cast<const char*>(&numSamples), sizeof(int));
+    file.write(reinterpret_cast<const char*>(&height), sizeof(int));
+    file.write(reinterpret_cast<const char*>(&width), sizeof(int));
+    file.write(reinterpret_cast<const char*>(&channels), sizeof(int));
+    
+    // Write labels
+    file.write(reinterpret_cast<const char*>(testLabels.data()), numSamples * sizeof(int));
+    
+    // Write per-image MSE
+    file.write(reinterpret_cast<const char*>(perImageMSE.data()), numSamples * sizeof(float));
+    
+    // Write original images (N x H x W x C, float32)
+    for (int i = 0; i < numSamples; i++) {
+        for (int h = 0; h < height; h++) {
+            for (int w = 0; w < width; w++) {
+                for (int c = 0; c < channels; c++) {
+                    float pixel = static_cast<float>(testBatch.at(i, h, w, c));
+                    file.write(reinterpret_cast<const char*>(&pixel), sizeof(float));
+                }
+            }
+        }
+    }
+    
+    // Write reconstructed images (N x H x W x C, float32)
+    for (int i = 0; i < numSamples; i++) {
+        for (int h = 0; h < height; h++) {
+            for (int w = 0; w < width; w++) {
+                for (int c = 0; c < channels; c++) {
+                    // Clip to [0, 1] range
+                    float pixel = static_cast<float>(reconstructed.at(i, h, w, c));
+                    pixel = std::max(0.0f, std::min(1.0f, pixel));
+                    file.write(reinterpret_cast<const char*>(&pixel), sizeof(float));
+                }
+            }
+        }
+    }
+    
+    file.close();
+    
+    std::cout << "Exported " << numSamples << " sample images to: " << filename << "\n";
+    std::cout << "  Format: " << height << "x" << width << "x" << channels << " (HWC, float32)\n";
+    std::cout << "  Use 'python visualize_reconstruction.py' to visualize\n";
+    std::cout << "=====================================================\n";
+}
+
 int main(int argc, char* argv[]) {
     std::cout << "============================================================\n";
     std::cout << "   AUTOENCODER GPU (NAIVE) - Phase 2: CUDA Conv2D\n";
@@ -235,6 +329,24 @@ int main(int argc, char* argv[]) {
     // Save final model
     model.saveWeights(finalModelPath);
 
+    // Export training history to CSV
+    std::string csvPath = "training_history_gpu.csv";
+    {
+        std::ofstream csvFile(csvPath);
+        if (csvFile.is_open()) {
+            csvFile << "epoch,train_loss,test_loss,time_sec,is_best\n";
+            for (const auto& s : allStats) {
+                csvFile << s.epoch << ","
+                        << std::fixed << std::setprecision(8) << s.trainLoss << ","
+                        << s.testLoss << ","
+                        << std::setprecision(4) << s.epochTime << ","
+                        << (s.isBest ? 1 : 0) << "\n";
+            }
+            csvFile.close();
+            std::cout << "Training history exported to: " << csvPath << "\n";
+        }
+    }
+
     // Reports
     std::cout << "\nStep 4: Reports\n";
     std::cout << std::string(50, '-') << "\n";
@@ -258,6 +370,9 @@ int main(int argc, char* argv[]) {
 
     gProfiler.printReport();
     gMemoryTracker.printReport();
+
+    // Export sample reconstructed images for visualization
+    exportReconstructedImages(model, dataset, 10, "reconstructed_images_gpu.bin");
 
     // Final summary
     std::cout << "\n================== FINAL SUMMARY ==================\n";
