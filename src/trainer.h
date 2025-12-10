@@ -269,6 +269,102 @@ public:
     DataType getBestTestLoss() const { return bestTestLoss; }
     int getBestEpoch() const { return bestEpoch; }
     double getTotalTrainingTime() const { return totalTimer.elapsedSec(); }
+
+    /**
+     * @brief Export sample reconstructed images for visualization
+     * 
+     * This function takes some test images, passes them through the autoencoder,
+     * and saves both original and reconstructed images to a binary file.
+     * The Python script can then load and visualize them.
+     * 
+     * @param numSamples Number of sample images to export
+     * @param filename Output binary file path
+     */
+    void exportReconstructedImages(int numSamples = 10, const std::string& filename = "reconstructed_images_cpu.bin") {
+        std::cout << "\n========== EXPORTING RECONSTRUCTED IMAGES ==========\n";
+        
+        // Limit to available test images
+        numSamples = std::min(numSamples, dataset.getNumTestImages());
+        
+        // Get test images
+        Tensor4D testBatch = dataset.getTestBatch(0, numSamples);
+        std::vector<int> testLabels = dataset.getTestLabels(0, numSamples);
+        
+        // Forward pass through autoencoder to get reconstructed images
+        Tensor4D reconstructed = model.forward(testBatch);
+        
+        // Calculate per-image reconstruction error
+        std::vector<float> perImageMSE(numSamples);
+        for (int i = 0; i < numSamples; i++) {
+            double mse = 0.0;
+            int pixelCount = testBatch.height * testBatch.width * testBatch.channels;
+            for (int h = 0; h < testBatch.height; h++) {
+                for (int w = 0; w < testBatch.width; w++) {
+                    for (int c = 0; c < testBatch.channels; c++) {
+                        double diff = testBatch.at(i, h, w, c) - reconstructed.at(i, h, w, c);
+                        mse += diff * diff;
+                    }
+                }
+            }
+            perImageMSE[i] = static_cast<float>(mse / pixelCount);
+        }
+        
+        // Open output file
+        std::ofstream file(filename, std::ios::binary);
+        if (!file.is_open()) {
+            std::cerr << "Error: Cannot open file for writing: " << filename << std::endl;
+            return;
+        }
+        
+        // Write header
+        int height = testBatch.height;    // 32
+        int width = testBatch.width;      // 32
+        int channels = testBatch.channels; // 3
+        
+        file.write(reinterpret_cast<const char*>(&numSamples), sizeof(int));
+        file.write(reinterpret_cast<const char*>(&height), sizeof(int));
+        file.write(reinterpret_cast<const char*>(&width), sizeof(int));
+        file.write(reinterpret_cast<const char*>(&channels), sizeof(int));
+        
+        // Write labels
+        file.write(reinterpret_cast<const char*>(testLabels.data()), numSamples * sizeof(int));
+        
+        // Write per-image MSE
+        file.write(reinterpret_cast<const char*>(perImageMSE.data()), numSamples * sizeof(float));
+        
+        // Write original images (N x H x W x C, float32)
+        for (int i = 0; i < numSamples; i++) {
+            for (int h = 0; h < height; h++) {
+                for (int w = 0; w < width; w++) {
+                    for (int c = 0; c < channels; c++) {
+                        float pixel = static_cast<float>(testBatch.at(i, h, w, c));
+                        file.write(reinterpret_cast<const char*>(&pixel), sizeof(float));
+                    }
+                }
+            }
+        }
+        
+        // Write reconstructed images (N x H x W x C, float32)
+        for (int i = 0; i < numSamples; i++) {
+            for (int h = 0; h < height; h++) {
+                for (int w = 0; w < width; w++) {
+                    for (int c = 0; c < channels; c++) {
+                        // Clip to [0, 1] range for proper visualization
+                        float pixel = static_cast<float>(reconstructed.at(i, h, w, c));
+                        pixel = std::max(0.0f, std::min(1.0f, pixel));
+                        file.write(reinterpret_cast<const char*>(&pixel), sizeof(float));
+                    }
+                }
+            }
+        }
+        
+        file.close();
+        
+        std::cout << "Exported " << numSamples << " sample images to: " << filename << "\n";
+        std::cout << "  Format: " << height << "x" << width << "x" << channels << " (HWC, float32)\n";
+        std::cout << "  Use 'python visualize_reconstruction.py' to visualize\n";
+        std::cout << "=====================================================\n";
+    }
 };
 
 #endif // TRAINER_H

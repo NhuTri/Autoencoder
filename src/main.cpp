@@ -118,6 +118,9 @@ int main(int argc, char* argv[]) {
     // Export training history to CSV
     trainer.exportToCSV("training_history_cpu.csv");
 
+    // Export sample reconstructed images for visualization
+    trainer.exportReconstructedImages(10, "reconstructed_images_cpu.bin");
+
     // ========== SUMMARY ==========
     std::cout << "\n============== FINAL SUMMARY ==============\n";
     std::cout << "Training completed successfully!\n";
