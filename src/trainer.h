@@ -232,6 +232,32 @@ public:
         std::cout << "===================================================\n";
     }
 
+    /**
+     * @brief Export training history to CSV file for visualization
+     */
+    void exportToCSV(const std::string& filename = "training_history_cpu.csv") {
+        std::ofstream file(filename);
+        if (!file.is_open()) {
+            std::cerr << "Warning: Could not open " << filename << " for writing.\n";
+            return;
+        }
+        
+        // Write header
+        file << "epoch,train_loss,test_loss,time_sec,is_best\n";
+        
+        // Write data
+        for (const auto& stats : trainingHistory) {
+            file << stats.epoch << ","
+                 << std::fixed << std::setprecision(8) << stats.trainLoss << ","
+                 << stats.testLoss << ","
+                 << std::setprecision(4) << stats.epochTime << ","
+                 << (stats.isBest ? 1 : 0) << "\n";
+        }
+        
+        file.close();
+        std::cout << "Training history exported to: " << filename << "\n";
+    }
+
     DataType getFinalLoss() const {
         return trainingHistory.empty() ? 0.0f : trainingHistory.back().trainLoss;
     }
